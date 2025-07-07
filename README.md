@@ -42,7 +42,7 @@ Terminal 2 (Cliente):
 ./cliente
 ```
 
-##Estructura
+## Estructura
 ```
 .
 ├── Servidor4.c
