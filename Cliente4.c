@@ -1,18 +1,3 @@
-/*Funciones implementadas:
--Mostrar inventario (manejo de archivos, cliente y vendedor)
--Agregar productos (con manejo de archivos)
--Seleccionar producto (manejo de archivos)
--Ver carrito (manejo de archivos)
--Generar ticket (manejo de archivos)
-
-
-Funciones de inicio de sesión e interfaz faltantes (TODAS) con manejo de archivos
-
-*/
-
-/*Compilación
-    gcc Cliente2.c -o cliente -lform -lncurses -lcrypto*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,18 +12,11 @@ Funciones de inicio de sesión e interfaz faltantes (TODAS) con manejo de archiv
 #include <menu.h>
 #include <signal.h>
 
-#define MAX_ITEM_NAME_LENGTH 50
-#define MAX_DESCRIPTION_LENGTH 100
-#define MAX_INVENTORY_ITEMS 100
-#define MAX_USERNAME_LENGTH 50
-#define MAX_PASSWORD_LENGTH 50
+#include "escomerce.h"
+
 #define WIDTH 30
 #define HEIGHT 10
-#define MAX_USUARIOS 100
-#define NOMBRE_ARCHIVO_USUARIOS "usuarios.txt"
-#define INVENTARIO_FILE "inventario.txt"
 #define BUFFER_SIZE 1024
-#define LOCK_FILE "/tmp/server.lock"
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 #define CTRLD 4
 
@@ -54,44 +32,6 @@ int startx = 0;
 int starty = 0;
 void print_in_middle(WINDOW *win, int starty, int startx, int width, char *string, chtype color);
 
-typedef struct
-{
-    char user[MAX_USERNAME_LENGTH];
-    char password[MAX_PASSWORD_LENGTH];
-    char tipo[1]; // 1 para cliente, 2 para vendedor
-} Usuario;
-
-typedef struct
-{
-    int item_id;
-    char item_name[MAX_ITEM_NAME_LENGTH];
-    char description[MAX_DESCRIPTION_LENGTH];
-    float price;
-    int units;
-} InventoryItem;
-
-typedef struct
-{
-    int item_count;
-    InventoryItem items[MAX_INVENTORY_ITEMS];
-} Inventario;
-
-typedef struct
-{
-    int item_count;
-    InventoryItem items[MAX_INVENTORY_ITEMS];
-} Carrito;
-
-/*
-Funciones para trabajar con los semáforos
-*/
-union semun
-{
-    int val;               // Valor para SETVAL
-    struct semid_ds *buf;  // Buffer para IPC_STAT y IPC_SET
-    unsigned short *array; // Array para GETALL y SETALL
-};
-//"Envía" una señal en el semáforo
 void sem_signal(int semid, int sem_num)
 {
     struct sembuf sem_op;
@@ -105,16 +45,6 @@ void sem_signal(int semid, int sem_num)
     }
 }
 
-/*Función void semwait(int semid, int sem_num)
-RECIBE:
-    int semid       -       ID del semáforo en cuestión
-    int sem_num     -       Número de semáforo asociado
-                            al ID del semáforo. Por defecto
-                            se trata del semáforo 0, indicando
-                            que solo hay un semáforo asociado
-FUNCIONAMIENTO:
-    Espera la señal de un semáforo
-*/
 void sem_wait(int semid, int sem_num)
 {
     struct sembuf sem_op;
@@ -167,7 +97,7 @@ int isValidUnits(int units)
 
 int Ingresa_semaforo(key_t llave)
 {
-    int semid = semget(llave, 1, 0); // ingreso al semaforo creado con esta llave
+    int semid = semget(llave, 1, 0);
     if (semid == -1)
     {
         printf("Error al ingresar al semáforo\n");
@@ -184,38 +114,40 @@ int crea_semaforo(key_t llave, int valor_inicial)
         perror("semget");
         exit(1);
     }
-    semctl(semid, 0, SETVAL, valor_inicial);
+    union semun arg;
+    arg.val = valor_inicial;
+    semctl(semid, 0, SETVAL, arg);
     return semid;
 }
 
 void down(int semid)
 {
-    struct sembuf op_p[] = {0, -1, 0};
-    semop(semid, op_p, 1);
+    struct sembuf op_p = {0, -1, 0};
+    semop(semid, &op_p, 1);
 }
 
 void up(int semid)
 {
-    struct sembuf op_v[] = {0, +1, 0};
-    semop(semid, op_v, 1);
+    struct sembuf op_v = {0, +1, 0};
+    semop(semid, &op_v, 1);
 }
 
 int check_server_running()
 {
-    // Verificar si el archivo de bloqueo existe y tiene permisos de lectura
+
     if (access(LOCK_FILE, F_OK | R_OK) == 0)
     {
-        return 1; // El archivo de bloqueo existe y tiene permisos
+        return 1;
     }
     else
     {
-        return 0; // El archivo de bloqueo no existe o no tiene permisos adecuados
+        return 0;
     }
 }
 
 void validarServidor()
 {
-    // Verificar si el servidor está corriendo antes de mostrar el menú
+
     if (!check_server_running())
     {
         fprintf(stderr, "El servidor no está en ejecución, ejecute primero el servidor\n");
@@ -231,7 +163,11 @@ void cargar_usuarios(Usuario usuarios[], int *cantidad_usuarios)
         return;
     }
 
-    while (fscanf(archivo, "%s %s %s", usuarios[*cantidad_usuarios].user, usuarios[*cantidad_usuarios].password, usuarios[*cantidad_usuarios].tipo) != EOF)
+    while (*cantidad_usuarios < MAX_USUARIOS &&
+           fscanf(archivo, "%49s %79s %7s",
+                  usuarios[*cantidad_usuarios].user,
+                  usuarios[*cantidad_usuarios].password,
+                  usuarios[*cantidad_usuarios].tipo) == 3)
     {
         (*cantidad_usuarios)++;
     }
@@ -254,7 +190,7 @@ Usuario encontrar_usuario(Usuario usuarios[], int cantidad_usuarios, const char 
 
 void mostrarInventario()
 {
-    key_t llave_inventario = ftok("Servidor3.c", 'i');
+    key_t llave_inventario = KEY_SHM_INVENTARIO;
     int id_inventario = shmget(llave_inventario, sizeof(Inventario), IPC_CREAT | 0777);
     Inventario *inventario = (Inventario *)shmat(id_inventario, 0, 0);
 
@@ -276,7 +212,7 @@ void mostrarInventario()
 
 void mostrarCarrito()
 {
-    key_t llave_carrito = ftok("Servidor3.c", 'k');
+    key_t llave_carrito = KEY_SHM_CARRITO;
     int id_carrito = shmget(llave_carrito, sizeof(Carrito), 0777);
     Carrito *carrito = (Carrito *)shmat(id_carrito, 0, 0);
 
@@ -298,83 +234,33 @@ void mostrarCarrito()
 
 void seleccionarProducto()
 {
-    int item_id, found = 0;
+    int item_id;
     printf("Ingrese el ID del producto que desea seleccionar: ");
     scanf("%d", &item_id);
 
-    FILE *inventario_file = fopen(INVENTARIO_FILE, "r");
-    if (inventario_file == NULL)
-    {
-        perror("Error al abrir archivo de inventario");
-        return;
-    }
+    int id_sel = shmget(KEY_SHM_SELID, sizeof(SeleccionMsg), IPC_CREAT | 0777);
+    SeleccionMsg *msg = (SeleccionMsg *)shmat(id_sel, 0, 0);
+    msg->item_id = item_id;
+    msg->status = 0;
 
-    FILE *temp_file = fopen("temp_inventario.txt", "w");
-    if (temp_file == NULL)
-    {
-        perror("Error al abrir archivo temporal");
-        fclose(inventario_file);
-        return;
-    }
+    int req = Ingresa_semaforo(KEY_SEM_SEL_REQ);
+    int done = Ingresa_semaforo(KEY_SEM_SEL_DONE);
+    sem_signal(req, 0);
+    sem_wait(done, 0);
 
-    char buffer[BUFFER_SIZE];
-    InventoryItem selected_item;
-
-    while (fgets(buffer, BUFFER_SIZE, inventario_file) != NULL)
-    {
-        InventoryItem item;
-        sscanf(buffer, "%d %s %s %f %d", &item.item_id, item.item_name, item.description, &item.price, &item.units);
-
-        if (item.item_id == item_id)
-        {
-            found = 1;
-            if (item.units > 0)
-            {
-                selected_item = item;
-                selected_item.units--; // Decrementar la cantidad en 1
-                if (selected_item.units > 0)
-                {
-                    fprintf(temp_file, "%d %s %s %.2f %d\n", selected_item.item_id, selected_item.item_name, selected_item.description, selected_item.price, selected_item.units);
-                }
-            }
-            else
-            {
-                printf("El producto no está disponible.\n");
-            }
-        }
-        else
-        {
-            fprintf(temp_file, "%d %s %s %.2f %d\n", item.item_id, item.item_name, item.description, item.price, item.units);
-        }
-    }
-
-    fclose(inventario_file);
-    fclose(temp_file);
-
-    if (found)
-    {
-        remove(INVENTARIO_FILE);
-        rename("temp_inventario.txt", INVENTARIO_FILE);
-
-        key_t llave_carrito = ftok("Servidor3.c", 'k');
-        int id_carrito = shmget(llave_carrito, sizeof(Carrito), IPC_CREAT | 0777);
-        Carrito *carrito = (Carrito *)shmat(id_carrito, 0, 0);
-
-        carrito->items[carrito->item_count++] = selected_item;
-
-        shmdt(carrito);
-    }
+    if (msg->status == 0)
+        printf("Producto agregado al carrito.\n");
+    else if (msg->status == -2)
+        printf("El producto no está disponible (sin stock).\n");
     else
-    {
         printf("Producto no encontrado.\n");
-        remove("temp_inventario.txt");
-    }
+
+    shmdt(msg);
 }
 
 void generarTicket()
 {
-    key_t llave_carrito = ftok("Servidor3.c", 'k');
-    int id_carrito = shmget(llave_carrito, sizeof(Carrito), 0777);
+    int id_carrito = shmget(KEY_SHM_CARRITO, sizeof(Carrito), 0777);
     Carrito *carrito = (Carrito *)shmat(id_carrito, 0, 0);
 
     printf("\n======================================\n");
@@ -392,6 +278,7 @@ void generarTicket()
     }
     printf("======================================\n");
     printf("TOTAL: %.2f\n", total);
+    shmdt(carrito);
 
     int finalizar_compra;
     printf("Presione 1 para finalizar la compra, 0 para seguir comprando: ");
@@ -399,49 +286,21 @@ void generarTicket()
 
     if (finalizar_compra == 1)
     {
-        // Solicitar número de ticket al servidor
-        FILE *ticket_file = fopen("tickets.txt", "r+");
-        int ticket_num;
-        if (ticket_file == NULL)
-        {
-            ticket_file = fopen("tickets.txt", "w");
-            ticket_num = 1;
-            fprintf(ticket_file, "%d", ticket_num);
-        }
+        int id_tnum = shmget(KEY_SHM_TKTNUM, sizeof(int), IPC_CREAT | 0777);
+        int *tnum = (int *)shmat(id_tnum, 0, 0);
+
+        int req = Ingresa_semaforo(KEY_SEM_TKT_REQ);
+        int done = Ingresa_semaforo(KEY_SEM_TKT_DONE);
+        sem_signal(req, 0);
+        sem_wait(done, 0);
+
+        if (*tnum > 0)
+            printf("Compra finalizada. Ticket #%d generado.\n", *tnum);
         else
-        {
-            fscanf(ticket_file, "%d", &ticket_num);
-            ticket_num++;
-            fseek(ticket_file, 0, SEEK_SET);
-            fprintf(ticket_file, "%d", ticket_num);
-        }
-        fclose(ticket_file);
+            printf("El carrito está vacío, no se generó ticket.\n");
 
-        // Crear archivo de ticket
-        char ticket_filename[20];
-        sprintf(ticket_filename, "ticket_%d.txt", ticket_num);
-        FILE *ticket = fopen(ticket_filename, "w");
-        if (ticket == NULL)
-        {
-            perror("Error al crear archivo de ticket");
-            shmdt(carrito);
-            return;
-        }
-
-        for (int i = 0; i < carrito->item_count; i++)
-        {
-            InventoryItem item = carrito->items[i];
-            fprintf(ticket, "ID: %d, PRODUCTO: %s, DESCRIPCION: %s, PRECIO: %.2f\n",
-                    item.item_id, item.item_name, item.description, item.price);
-        }
-        fprintf(ticket, "TOTAL: %.2f\n", total);
-        fclose(ticket);
-
-        // Limpiar carrito
-        carrito->item_count = 0;
+        shmdt(tnum);
     }
-
-    shmdt(carrito);
 }
 
 void menuCliente()
@@ -546,150 +405,49 @@ void menuCliente()
     clrtoeol();
     refresh();
     endwin();
-    /*int opcion;
-    while (1)
-    {
 
-        printf("\nMenu Cliente:\n");
-        printf("1. Mostrar inventario\n");
-        printf("2. Seleccionar producto\n");
-        printf("3. Ver carrito\n");
-        printf("4. Generar ticket\n");
-        printf("5. Cerrar sesión\n");
-        printf("Selecciona una opción: ");
-        scanf("%d", &opcion);
-        switch (opcion)
-        {
-        case 1:
-            validarServidor();
-            mostrarInventario();
-            break;
-        case 2:
-            validarServidor();
-            seleccionarProducto();
-            break;
-        case 3:
-            validarServidor();
-            mostrarCarrito();
-            break;
-        case 4:
-            validarServidor();
-            generarTicket();
-            break;
-        case 5:
-            validarServidor();
-            exit(-1);
-        default:
-            validarServidor();
-            printf("Opción inválida.\n");
-        }
-    }*/
 }
 
-/**
- * @brief Agrega un producto al inventario dado
- *
- * @param inventario Referencia al inventario donde se va a trabajar
- */
-void agregarProducto(Inventario *inventario)
+void agregarProducto()
 {
-    // Verifica que el inventario aún tenga espacio
-    if (inventario->item_count >= MAX_INVENTORY_ITEMS)
-    {
-        printf("El inventario está lleno, no se pueden agregar más productos.\n");
-        return;
-    }
 
-    // ID del semáforo que seleccionará la opcion en el menu
-    int semID;
-    // Key que permitirá acceder al espacio de memoria correspondiente a la opción
-    key_t semKey = 2004, newItemKey = 2208;
-
-    // Crear el semáforo
-    semID = semget(semKey, 1, 0666 | IPC_CREAT);
-    if (semID == -1)
-    {
-        perror("semget");
-        exit(1);
-    }
-
-    // Inicializar el semáforo
-    union semun sem_union;
-    // Inicializar el semáforo a 0
-    sem_union.val = 0;
-    if (semctl(semID, 0, SETVAL, sem_union) == -1)
-    {
-        perror("semctl");
-        exit(1);
-    }
-
-    // Obtiene la referencia al espacio de memoria compartida
-    // La memoria compartida es tratada como un elemento Item
-    int shmItemID = shmget(newItemKey, sizeof(InventoryItem), 0777 | IPC_CREAT);
+    int shmItemID = shmget(KEY_SHM_NEWITEM, sizeof(InventoryItem), 0777 | IPC_CREAT);
     if (shmItemID < 0)
     {
         perror("Error en shmget - agregar producto (C): ");
-        exit(1);
+        return;
     }
-    // Adjunta el espacio de memoria compartida al registro de memoria del hilo
     InventoryItem *nuevo_item = (InventoryItem *)shmat(shmItemID, NULL, 0);
     if (nuevo_item == (InventoryItem *)-1)
     {
         perror("Error en shmat - agregarProducto (C): ");
-        exit(1);
+        return;
     }
 
-    // Asigna ID de acuerdo al numero de items en el inventario
-    nuevo_item->item_id = inventario->item_count + 1;
-    // Ingresa los datos del nuevo producto
     printf("Ingrese el nombre del producto: ");
-    scanf(" %[^\n]s", nuevo_item->item_name);
+    scanf(" %49[^\n]", nuevo_item->item_name);
     replaceSpacesWithUnderscores(nuevo_item->item_name);
     printf("Ingrese el precio del producto: ");
     scanf("%f", &nuevo_item->price);
     printf("Ingrese la descripción del producto (máx 100 caracteres): ");
-    scanf(" %[^\n]s", nuevo_item->description);
+    scanf(" %99[^\n]", nuevo_item->description);
     replaceSpacesWithUnderscores(nuevo_item->description);
     printf("Ingrese la cantidad de producto que tiene a su disposición: ");
     scanf("%d", &nuevo_item->units);
+    if (nuevo_item->units < 0)
+        nuevo_item->units = 0;
 
-    // Envía la señal al semáforo indicando que ya es posible leer de la memoria
-    sem_signal(semID, 0);
+    int req = Ingresa_semaforo(KEY_SEM_ADD_REQ);
+    int done = Ingresa_semaforo(KEY_SEM_ADD_DONE);
+    sem_signal(req, 0);
+    sem_wait(done, 0);
+    printf("Producto enviado al servidor para su registro.\n");
+
+    shmdt(nuevo_item);
 }
 
-/**
- * @brief Menú desplegado para los usuarios Vendedores.
- * Envía una señal al semáforo especificado en caso de seleccionarse
- * la opción de agregar un producto.
- *
- * @param inventario Referencia al inventario sobre el cual se está trabajando
- */
-void menuVendedor(Inventario *inventario)
+void menuVendedor()
 {
-
-    // ID del semáforo que seleccionará la opcion en el menu
-    int semID, opcion;
-    // Key que permitirá acceder al espacio de memoria correspondiente a la opción
-    key_t semKey = 2001;
-
-    // Crear el semáforo
-    semID = semget(semKey, 1, 0666 | IPC_CREAT);
-    if (semID == -1)
-    {
-        perror("semget");
-        exit(1);
-    }
-
-    // Inicializar el semáforo
-    union semun sem_union;
-    // Inicializar el semáforo a 0
-    sem_union.val = 0;
-    if (semctl(semID, 0, SETVAL, sem_union) == -1)
-    {
-        perror("semctl");
-        exit(1);
-    }
-
     int highlight = 1;
     int choice = 0;
     int salir = 0;
@@ -761,9 +519,7 @@ void menuVendedor(Inventario *inventario)
             else if (choice == 2)
             {
                 validarServidor();
-                sem_signal(semID, 0);
-                sleep(1);
-                agregarProducto(inventario);
+                agregarProducto();
                 getch();
             }
 
@@ -808,307 +564,316 @@ void hashear_contrasena(const char *contrasena, char *contrasena_hasheada)
     contrasena_hasheada[SHA256_DIGEST_LENGTH * 2] = '\0';
 }
 
-int iniciar_sesion(WINDOW *win)
+void iniciar_sesion(WINDOW *menu_win)
 {
+    (void)menu_win;
     char contrasena_hasheada[SHA256_DIGEST_LENGTH * 2 + 1];
     int inicioCorrecto = 0;
-    werase(win);
     FIELD *field[3];
     FORM *my_form;
     int ch, rows, cols;
 
-    /* Initialize curses */
-    initscr();
-    start_color();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-
-    /* Initialize few color pairs */
-    init_pair(1, COLOR_RED, COLOR_BLACK);
-
-    /* Initialize the fields */
     field[0] = new_field(1, 20, 6, 14, 0, 0);
     field[1] = new_field(1, 20, 8, 14, 0, 0);
     field[2] = NULL;
 
-    /* Set field options */
     set_field_back(field[0], A_UNDERLINE);
-    field_opts_off(field[0], O_AUTOSKIP); /* Don't go to next field when this */
-                                          /* Field is filled up             */
+    field_opts_off(field[0], O_AUTOSKIP);
     set_field_back(field[1], A_UNDERLINE);
     field_opts_off(field[1], O_AUTOSKIP);
 
-    /* Create the form and post it */
     my_form = new_form(field);
-
-    /* Calculate the area required for the form */
     scale_form(my_form, &rows, &cols);
 
-    /* Create the window to be associated with the form */
-    win = newwin(rows + 8, cols + 20, 2, 4);
+    WINDOW *win = newwin(rows + 8, cols + 20, 2, 4);
     keypad(win, TRUE);
-
-    /* Set main window and sub window */
     set_form_win(my_form, win);
     set_form_sub(my_form, derwin(win, rows, cols, 2, 2));
 
-    /* Print a border around the main window and print a title */
     box(win, 0, 0);
     print_in_middle(win, 1, 0, cols + 10, "Iniciar Sesion", COLOR_PAIR(1));
-
     post_form(my_form);
-    wrefresh(win);
-    refresh();
 
     mvwprintw(win, 8, 1, "Usuario:");
-    mvwprintw(win, 10, 1, "Contraseña:");
-    refresh();
+    mvwprintw(win, 10, 1, "Contrasena:");
+    mvwprintw(win, rows + 5, 1, "Enter: siguiente campo  |  Enter en Clave: entrar");
+    mvwprintw(win, rows + 6, 1, "Flechas: moverse  |  F1: cancelar");
 
-    char pass[20] = {'\0'};
-    int posPass = 0;
-
-    /* Loop through to get user requests */
-     while ((ch = wgetch(win)) != KEY_F(1) && !inicioCorrecto)
-    {
-        switch (ch)
-        {
-        case KEY_DOWN:
-            /* Go to next field */
-            form_driver(my_form, REQ_NEXT_FIELD);
-            /* Go to the end of the present buffer */
-            /* Leaves nicely at the last character */
-            form_driver(my_form, REQ_END_LINE);
-            break;
-        case KEY_UP:
-            /* Go to previous field */
-            form_driver(my_form, REQ_PREV_FIELD);
-            form_driver(my_form, REQ_END_LINE);
-            break;
-        case KEY_BACKSPACE:
-            form_driver(my_form, REQ_PREV_CHAR);
-            form_driver(my_form, REQ_DEL_CHAR);
-            pass[posPass] = '\0';
-            if (posPass > 0)
-            {
-                posPass--;
-            }
-            break;
-        case 10:
-            Usuario usuarios[MAX_USUARIOS];
-            int cantidad_usuarios = 0;
-            int id_inventario = shmget(ftok("Servidor3.c", 'i'), sizeof(Inventario), IPC_CREAT | 0777);
-            Inventario *inventario = (Inventario *)shmat(id_inventario, 0, 0);
-            cargar_usuarios(usuarios, &cantidad_usuarios);
-            form_driver(my_form, REQ_VALIDATION);
-            quitarEspacios(field_buffer(field[0], 0));
-            Usuario validado = encontrar_usuario(usuarios, cantidad_usuarios, field_buffer(field[0], 0));
-            if (!strcmp(validado.tipo, "9"))
-            {
-                mvwprintw(win, 3, 1, "Usuario no encontrado!");
-                mvwprintw(win, 4, 1, "%s", validado.user);
-            }
-            else
-            {
-                // Hash the entered password
-                hashear_contrasena(pass, contrasena_hasheada);
-                if (strcmp(validado.password, contrasena_hasheada) == 0)
-                {
-                    if (!strcmp(validado.tipo, "1"))
-                    {
-                        menuCliente();
-                    }
-                    else
-                    {
-                        menuVendedor(inventario);
-                    }
-                    inicioCorrecto = 1;
-                }
-                else
-                {
-                    mvwprintw(win, 3, 1, "Contraseña invalida!");
-                }
-            }
-
-            break;
-	default:
-		/* If this is a normal character, it gets */
-		/* Printed                                */
-		if (current_field(my_form) == field[1])
-		{
-		form_driver(my_form, '*');
-		pass[posPass] = (char)ch;
-		posPass++;
-		}
-		else
-		{
-		form_driver(my_form, ch);
-		}
-
-		break;
-
-        }
-    }
-
-    /* Un post form and free the memory */
-    unpost_form(my_form);
-    free_form(my_form);
-    free_field(field[0]);
-    free_field(field[1]);
-
-    endwin();
-}
-
-void registrar_usuario(WINDOW *win)
-{
-    int mutex = Ingresa_semaforo(ftok("Servidor3.c", 's'));
-    int clientes = Ingresa_semaforo(ftok("Servidor3.c", 'c'));
-    int id_usuario = shmget(ftok("Servidor3.c", 'u'), sizeof(Usuario), IPC_CREAT | 0777);
-    Usuario *usuario = (Usuario *)shmat(id_usuario, 0, 0);
-
-    int id_inventario = shmget(ftok("Servidor3.c", 'i'), sizeof(Inventario), IPC_CREAT | 0777);
-    Inventario *inventario = (Inventario *)shmat(id_inventario, 0, 0);
-    char contrasena_hasheada[SHA256_DIGEST_LENGTH * 2 + 1];
-    int inicioCorrecto = 0;
-    werase(win);
-    FIELD *field[4];
-    FORM *my_form;
-    int ch, rows, cols;
-
-    /* Initialize curses */
-    initscr();
-    start_color();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-
-    /* Initialize few color pairs */
-    init_pair(1, COLOR_RED, COLOR_BLACK);
-
-    /* Initialize the fields */
-    field[0] = new_field(1, 20, 6, 14, 0, 0);
-    field[1] = new_field(1, 20, 8, 14, 0, 0);
-    field[2] = new_field(1, 10, 10, 14, 0, 0);
-    field[3] = NULL;
-
-    /* Set field options */
-    set_field_back(field[0], A_UNDERLINE);
-    field_opts_off(field[0], O_AUTOSKIP); /* Don't go to next field when this */
-                                          /* Field is filled up             */
-    set_field_back(field[1], A_UNDERLINE);
-    field_opts_off(field[1], O_AUTOSKIP);
-
-    set_field_back(field[2], A_UNDERLINE);
-    field_opts_off(field[2], O_AUTOSKIP);
-
-    /* Create the form and post it */
-    my_form = new_form(field);
-
-    /* Calculate the area required for the form */
-    scale_form(my_form, &rows, &cols);
-
-    /* Create the window to be associated with the form */
-    win = newwin(rows + 8, cols + 20, 2, 4);
-    keypad(win, TRUE);
-
-    /* Set main window and sub window */
-    set_form_win(my_form, win);
-    set_form_sub(my_form, derwin(win, rows, cols, 2, 2));
-
-    /* Print a border around the main window and print a title */
-    box(win, 0, 0);
-    print_in_middle(win, 1, 0, cols + 10, "Registrar Usuario", COLOR_PAIR(1));
-
-    post_form(my_form);
+    curs_set(1);
+    set_current_field(my_form, field[0]);
+    pos_form_cursor(my_form);
     wrefresh(win);
-    refresh();
 
-    mvwprintw(win, 8, 1, "Usuario:");
-    mvwprintw(win, 10, 1, "Contraseña:");
-    mvwprintw(win, 12, 1, "Tipo:");
-    refresh();
-
-    char pass[20] = {'\0'};
+    char pass[64] = {'\0'};
     int posPass = 0;
 
-    /* Loop through to get user requests */
     while ((ch = wgetch(win)) != KEY_F(1) && !inicioCorrecto)
     {
         switch (ch)
         {
         case KEY_DOWN:
-            /* Go to next field */
+        case '\t':
             form_driver(my_form, REQ_NEXT_FIELD);
-            /* Go to the end of the present buffer */
-            /* Leaves nicely at the last character */
             form_driver(my_form, REQ_END_LINE);
             break;
         case KEY_UP:
-            /* Go to previous field */
             form_driver(my_form, REQ_PREV_FIELD);
             form_driver(my_form, REQ_END_LINE);
             break;
         case KEY_BACKSPACE:
-            form_driver(my_form, REQ_PREV_CHAR);
-            form_driver(my_form, REQ_DEL_CHAR);
-            pass[posPass] = '\0';
-            if (posPass > 0)
+        case 127:
+        case 8:
+            if (current_field(my_form) == field[1])
             {
-                posPass--;
+                if (posPass > 0)
+                {
+                    posPass--;
+                    pass[posPass] = '\0';
+                }
             }
+            form_driver(my_form, REQ_DEL_PREV);
             break;
         case 10:
-            form_driver(my_form, REQ_VALIDATION);
-            quitarEspacios(field_buffer(field[0], 0));
-            quitarEspacios(field_buffer(field[2], 0));
-            strcpy(usuario->user, field_buffer(field[0], 0));
-            // Hash the password before storing it
-            hashear_contrasena(pass, contrasena_hasheada);
-            strcpy(usuario->password, contrasena_hasheada);
-            strcpy(usuario->tipo, field_buffer(field[2], 0));
-            up(mutex);
-            unpost_form(my_form);
-            free_form(my_form);
-            free_field(field[0]);
-            free_field(field[1]);
-            free_field(field[2]);
-            werase(win);
-            endwin();
-            if (!strcmp(usuario->tipo, "1"))
+            if (current_field(my_form) != field[1])
             {
-                menuCliente();
+                form_driver(my_form, REQ_NEXT_FIELD);
+                form_driver(my_form, REQ_END_LINE);
+                break;
             }
-            else if (!strcmp(usuario->tipo, "2"))
+            form_driver(my_form, REQ_VALIDATION);
             {
-                menuVendedor(inventario);
+                Usuario usuarios[MAX_USUARIOS];
+                int cantidad_usuarios = 0;
+                cargar_usuarios(usuarios, &cantidad_usuarios);
+                char userbuf[MAX_USERNAME_LENGTH];
+                strncpy(userbuf, field_buffer(field[0], 0), sizeof(userbuf) - 1);
+                userbuf[sizeof(userbuf) - 1] = '\0';
+                quitarEspacios(userbuf);
+                Usuario validado = encontrar_usuario(usuarios, cantidad_usuarios, userbuf);
+                if (!strcmp(validado.tipo, "9"))
+                {
+                    mvwprintw(win, 3, 1, "Usuario no encontrado.   ");
+                }
+                else
+                {
+                    hashear_contrasena(pass, contrasena_hasheada);
+                    if (strcmp(validado.password, contrasena_hasheada) == 0)
+                    {
+                        inicioCorrecto = 1;
+                        curs_set(0);
+                        unpost_form(my_form);
+                        free_form(my_form);
+                        free_field(field[0]);
+                        free_field(field[1]);
+                        delwin(win);
+                        clear();
+                        refresh();
+                        if (!strcmp(validado.tipo, "1"))
+                            menuCliente();
+                        else
+                            menuVendedor();
+                        return;
+                    }
+                    else
+                    {
+                        mvwprintw(win, 3, 1, "Contrasena invalida.     ");
+                        set_field_buffer(field[1], 0, "");
+                        memset(pass, 0, sizeof(pass));
+                        posPass = 0;
+                        set_current_field(my_form, field[1]);
+                    }
+                }
             }
             break;
         default:
-            /* If this is a normal character, it gets */
-            /* Printed                                */
             if (current_field(my_form) == field[1])
             {
-                form_driver(my_form, '*');
-                pass[posPass] = (char)ch;
-                posPass++;
+                if (posPass < (int)sizeof(pass) - 1)
+                {
+                    pass[posPass++] = (char)ch;
+                    form_driver(my_form, '*');
+                }
             }
             else
             {
                 form_driver(my_form, ch);
             }
-
             break;
         }
+        pos_form_cursor(my_form);
+        wrefresh(win);
     }
 
-    /* Un post form and free the memory */
+    curs_set(0);
+    unpost_form(my_form);
+    free_form(my_form);
+    free_field(field[0]);
+    free_field(field[1]);
+    delwin(win);
+    clear();
+    refresh();
+}
+
+void registrar_usuario(WINDOW *menu_win)
+{
+    (void)menu_win;
+    int mutex = Ingresa_semaforo(KEY_SEM_MUTEX);
+    int id_usuario = shmget(KEY_SHM_USUARIO, sizeof(Usuario), IPC_CREAT | 0777);
+    Usuario *usuario = (Usuario *)shmat(id_usuario, 0, 0);
+    char contrasena_hasheada[SHA256_DIGEST_LENGTH * 2 + 1];
+    int registrado = 0;
+    FIELD *field[4];
+    FORM *my_form;
+    int ch, rows, cols;
+
+    field[0] = new_field(1, 20, 6, 14, 0, 0);
+    field[1] = new_field(1, 20, 8, 14, 0, 0);
+    field[2] = new_field(1, 10, 10, 14, 0, 0);
+    field[3] = NULL;
+
+    set_field_back(field[0], A_UNDERLINE);
+    field_opts_off(field[0], O_AUTOSKIP);
+    set_field_back(field[1], A_UNDERLINE);
+    field_opts_off(field[1], O_AUTOSKIP);
+    set_field_back(field[2], A_UNDERLINE);
+    field_opts_off(field[2], O_AUTOSKIP);
+
+    my_form = new_form(field);
+    scale_form(my_form, &rows, &cols);
+
+    WINDOW *win = newwin(rows + 8, cols + 20, 2, 4);
+    keypad(win, TRUE);
+    set_form_win(my_form, win);
+    set_form_sub(my_form, derwin(win, rows, cols, 2, 2));
+
+    box(win, 0, 0);
+    print_in_middle(win, 1, 0, cols + 10, "Registrar Usuario", COLOR_PAIR(1));
+    post_form(my_form);
+
+    mvwprintw(win, 8, 1, "Usuario:");
+    mvwprintw(win, 10, 1, "Contrasena:");
+    mvwprintw(win, 12, 1, "Tipo:");
+    mvwprintw(win, 13, 1, "(1 = cliente, 2 = vendedor)");
+    mvwprintw(win, rows + 5, 1, "Enter: siguiente campo  |  Enter en Tipo: registrar");
+    mvwprintw(win, rows + 6, 1, "Flechas: moverse  |  F1: cancelar");
+
+    curs_set(1);
+    set_current_field(my_form, field[0]);
+    pos_form_cursor(my_form);
+    wrefresh(win);
+
+    char pass[64] = {'\0'};
+    int posPass = 0;
+
+    while ((ch = wgetch(win)) != KEY_F(1) && !registrado)
+    {
+        switch (ch)
+        {
+        case KEY_DOWN:
+        case '\t':
+            form_driver(my_form, REQ_NEXT_FIELD);
+            form_driver(my_form, REQ_END_LINE);
+            break;
+        case KEY_UP:
+            form_driver(my_form, REQ_PREV_FIELD);
+            form_driver(my_form, REQ_END_LINE);
+            break;
+        case KEY_BACKSPACE:
+        case 127:
+        case 8:
+            if (current_field(my_form) == field[1])
+            {
+                if (posPass > 0)
+                {
+                    posPass--;
+                    pass[posPass] = '\0';
+                }
+            }
+            form_driver(my_form, REQ_DEL_PREV);
+            break;
+        case 10:
+            if (current_field(my_form) != field[2])
+            {
+                form_driver(my_form, REQ_NEXT_FIELD);
+                form_driver(my_form, REQ_END_LINE);
+                break;
+            }
+            form_driver(my_form, REQ_VALIDATION);
+            {
+                char userbuf[MAX_USERNAME_LENGTH];
+                char tipobuf[8];
+                strncpy(userbuf, field_buffer(field[0], 0), sizeof(userbuf) - 1);
+                userbuf[sizeof(userbuf) - 1] = '\0';
+                quitarEspacios(userbuf);
+                strncpy(tipobuf, field_buffer(field[2], 0), sizeof(tipobuf) - 1);
+                tipobuf[sizeof(tipobuf) - 1] = '\0';
+                quitarEspacios(tipobuf);
+
+                if (strlen(userbuf) == 0)
+                {
+                    mvwprintw(win, 3, 1, "El usuario no puede estar vacio.   ");
+                    set_current_field(my_form, field[0]);
+                    break;
+                }
+                if (strcmp(tipobuf, "1") != 0 && strcmp(tipobuf, "2") != 0)
+                {
+                    mvwprintw(win, 3, 1, "Tipo invalido: escribe 1 o 2.      ");
+                    set_field_buffer(field[2], 0, "");
+                    set_current_field(my_form, field[2]);
+                    break;
+                }
+
+                strcpy(usuario->user, userbuf);
+                hashear_contrasena(pass, contrasena_hasheada);
+                strcpy(usuario->password, contrasena_hasheada);
+                strcpy(usuario->tipo, tipobuf);
+                up(mutex);
+
+                registrado = 1;
+                curs_set(0);
+                unpost_form(my_form);
+                free_form(my_form);
+                free_field(field[0]);
+                free_field(field[1]);
+                free_field(field[2]);
+                delwin(win);
+                clear();
+                refresh();
+                if (!strcmp(usuario->tipo, "1"))
+                    menuCliente();
+                else
+                    menuVendedor();
+                return;
+            }
+            break;
+        default:
+            if (current_field(my_form) == field[1])
+            {
+                if (posPass < (int)sizeof(pass) - 1)
+                {
+                    pass[posPass++] = (char)ch;
+                    form_driver(my_form, '*');
+                }
+            }
+            else
+            {
+                form_driver(my_form, ch);
+            }
+            break;
+        }
+        pos_form_cursor(my_form);
+        wrefresh(win);
+    }
+
+    curs_set(0);
     unpost_form(my_form);
     free_form(my_form);
     free_field(field[0]);
     free_field(field[1]);
     free_field(field[2]);
-
-    endwin();
+    delwin(win);
+    clear();
+    refresh();
 }
 
 void print_in_middle(WINDOW *win, int starty, int startx, int width, char *string, chtype color)
@@ -1140,28 +905,13 @@ int main()
 
     validarServidor();
 
-    int clientes, id_usuario, mutex;
-    Usuario *usuario;
-    Inventario *inventario;
-    Carrito *carrito;
-    key_t llave_clientes, llave_usuario, llave_mutex, llave_inventario, llave_carrito;
+    int clientes = Ingresa_semaforo(KEY_SEM_CLIENTES);
 
-    llave_clientes = ftok("Servidor3.c", 'c');
-    llave_usuario = ftok("Servidor3.c", 'u');
-    llave_mutex = ftok("Servidor3.c", 's');
-    llave_inventario = ftok("Servidor3.c", 'i');
-    llave_carrito = ftok("Servidor3.c", 'k');
+    int id_usuario = shmget(KEY_SHM_USUARIO, sizeof(Usuario), IPC_CREAT | 0777);
+    Usuario *usuario = (Usuario *)shmat(id_usuario, 0, 0);
 
-    clientes = crea_semaforo(llave_clientes, 0);
-    mutex = crea_semaforo(llave_mutex, 0);
-    id_usuario = shmget(llave_usuario, sizeof(Usuario), IPC_CREAT | 0777);
-    usuario = (Usuario *)shmat(id_usuario, 0, 0);
-
-    int id_inventario = shmget(llave_inventario, sizeof(Inventario), IPC_CREAT | 0777);
-    inventario = (Inventario *)shmat(id_inventario, 0, 0);
-
-    int id_carrito = shmget(llave_carrito, sizeof(Carrito), IPC_CREAT | 0777);
-    carrito = (Carrito *)shmat(id_carrito, 0, 0);
+    int id_carrito = shmget(KEY_SHM_CARRITO, sizeof(Carrito), IPC_CREAT | 0777);
+    Carrito *carrito = (Carrito *)shmat(id_carrito, 0, 0);
 
     up(clientes);
 
@@ -1171,16 +921,15 @@ int main()
     WINDOW *my_menu_win;
     int n_choices, i;
 
-    /* Initialize curses */
     initscr();
     start_color();
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
+    curs_set(0);
     init_pair(1, COLOR_RED, COLOR_BLACK);
     init_pair(2, COLOR_CYAN, COLOR_BLACK);
 
-    /* Create items */
     n_choices = ARRAY_SIZE(choices);
     my_items = (ITEM **)calloc(n_choices, sizeof(ITEM *));
     for (i = 0; i < n_choices; ++i)
@@ -1189,30 +938,25 @@ int main()
     }
     set_item_userptr(my_items[0], registrar_usuario);
     set_item_userptr(my_items[1], iniciar_sesion);
-    /* Crate menu */
+
     my_menu = new_menu((ITEM **)my_items);
 
-    /* Create the window to be associated with the menu */
     my_menu_win = newwin(10, 40, 4, 4);
     keypad(my_menu_win, TRUE);
     menu_opts_off(my_menu, O_SHOWDESC);
 
-    /* Set main window and sub window */
     set_menu_win(my_menu, my_menu_win);
     set_menu_sub(my_menu, derwin(my_menu_win, 6, 38, 3, 1));
     set_menu_format(my_menu, 5, 1);
 
-    /* Set menu mark to the string " * " */
     set_menu_mark(my_menu, " * ");
 
-    /* Print a border around the main window and print a title */
     box(my_menu_win, 0, 0);
     print_in_middle(my_menu_win, 1, 0, 40, "Inicio ESCOMERCE", COLOR_PAIR(1));
     mvwaddch(my_menu_win, 2, 0, ACS_LTEE);
     mvwhline(my_menu_win, 2, 1, ACS_HLINE, 38);
     mvwaddch(my_menu_win, 2, 39, ACS_RTEE);
 
-    /* Post the menu */
     post_menu(my_menu);
     wrefresh(my_menu_win);
 
@@ -1237,7 +981,7 @@ int main()
         case KEY_PPAGE:
             menu_driver(my_menu, REQ_SCR_UPAGE);
             break;
-        case 10: /* Enter */
+        case 10:
         {
             ITEM *cur;
             void (*p)(WINDOW *);
@@ -1251,37 +995,13 @@ int main()
         wrefresh(my_menu_win);
     }
 
-    /* Unpost and free all the memory taken up */
     unpost_menu(my_menu);
     free_menu(my_menu);
     for (i = 0; i < n_choices; ++i)
         free_item(my_items[i]);
     endwin();
-    /*while (1)
-    {
-        system("clear");
-        printf("\nSoy el proceso: %d\n", getpid());
-        printf("\nEscribe nombre de usuario: ");
-        scanf("%s", usuario->user);
-        printf("\nEscribe contrasena: ");
-        scanf("%s", usuario->password);
-        printf("\nTipo de usuario (1 para cliente, 2 para vendedor): ");
-        scanf("%d", &usuario->tipo);
-
-        sleep(1);
-
-        if (usuario->tipo == 1)
-        {
-            menuCliente();
-        }
-        else if (usuario->tipo == 2)
-        {
-            menuVendedor(inventario);
-        }
-    }*/
 
     shmdt(usuario);
-    shmdt(inventario);
     shmdt(carrito);
     return 0;
 }
